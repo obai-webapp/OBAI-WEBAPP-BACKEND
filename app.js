@@ -1,124 +1,56 @@
 const express = require('express');
 const cors = require('cors');
-const app = express();
-require('./src/config/mongoose').connect();
-const errorHandler = require('./src/utils/error-handler');
-const { isJsonStr } = require('./src/utils/utils');
-const { createUserApiLog } = require('./src/models/log-model');
-const requestIp = require('request-ip');
-const { expressLogger, expressErrorLogger, logger } = require('./src/utils/winston-logger');
-const endMw = require('express-end');
-const { isCelebrateError } = require('celebrate');
-const fs = require('fs');
-// Routes
-const userRoutes = require('./src/routes/user-routes');
-const config = require('./src/config/config');
-const mediaRouter = require('./src/routes/media-routes');
+const axios = require('axios');
 const helmet = require('helmet');
 const xss = require('xss-clean');
-// const mongoSanitize = require('express-mongo-sanitize');
+const requestIp = require('request-ip');
 const compression = require('express-compression');
-// const rateLimit = require('express-rate-limit');
+const endMw = require('express-end');
+const fs = require('fs');
+const { isCelebrateError } = require('celebrate');
+const { isJsonStr } = require('./src/utils/utils');
+const { createUserApiLog } = require('./src/models/log-model');
+const { expressLogger, expressErrorLogger, logger } = require('./src/utils/winston-logger');
+const config = require('./src/config/config');
+require('./src/config/mongoose').connect(); // Connect to MongoDB
+const errorHandler = require('./src/utils/error-handler');
+
+// Routes
+const userRoutes = require('./src/routes/user-routes');
+const mediaRouter = require('./src/routes/media-routes');
 const adminRouter = require('./src/routes/admin');
 const claimRouter = require('./src/routes/claim');
 
-// This will create folder in root dir with provided name and if exist already nothing happen
+const app = express();
+const NHTSA_BASE_URL = 'https://vpic.nhtsa.dot.gov/api/vehicles';
+
+// Ensure uploads folder exists
 const uploadsFolder = './uploads';
 if (!fs.existsSync(uploadsFolder)) {
     fs.mkdirSync(uploadsFolder);
 }
 
-// ----------------------------------Middleware Ended-------------------------------
+// Middleware configurations
+app.use(cors());
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '50mb' }));
+app.use(requestIp.mw());
+app.use(helmet());
+app.use(xss({ whiteList: { '*': ['style'], script: [] } })); // XSS configuration
+app.use(compression());
+app.use(expressLogger);
+app.use(endMw); // Middleware to signal when request handling is complete
 
-// Order of this route matters need to place this above store log middleware as it's returning empty result and we don't need to store record of this
+// Custom route to ping the server
 app.get('/' + config.server.route + '/pingServer', (req, res) => {
-    // Route to Ping & check if Server is online
     res.status(200).send('OK');
 });
 
-// Apply the rate limiting middleware to all requests
-// const limiter = rateLimit({
-//     windowMs: 15 * 60 * 1000, // 15 minutes
-//     max: 100, // Limit each IP to 100 requests per `window` (here, per 15 minutes)
-//     standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
-//     legacyHeaders: false // Disable the `X-RateLimit-*` headers
-// });
-
-// app.use(limiter);
-
-// ----------------------------Middleware for accepting encoded & json request params
-app.use(express.urlencoded({ extended: true }));
-app.use(express.json({ limit: '50mb' }));
-
-// ----------------------------------Middleware Ended-------------------------------
-
-// ----------------------------Middleware for capturing request is actually ended even though listener is timed out
-app.use(endMw);
-// ----------------------------------Middleware Ended-------------------------------
-
-// // ----------------------------Middleware for reading raw Body as text use req.body
-app.use(
-    express.text({
-        type: 'text/plain',
-        limit: '50mb'
-    })
-);
-// ----------------------------------Middleware Ended-------------------------------
-
-// ----------------------------Middleware for Getting a user's IP
-app.use(requestIp.mw());
-// ----------------------------------Middleware Ended-------------------------------
-
-// ----------------------------Middleware for printing logs on console
-app.use(expressLogger);
-// ----------------------------------Middleware Ended-------------------------------------
-
-// ----------------------------Middleware to Fix CORS Errors This Will Update The Incoming Request before sending to routes
-// Allow requests from all origins
-app.use(cors());
-
-// Configure Helmet
-app.use(helmet());
-
-// Add Helmet configurations
-app.use(
-    helmet.crossOriginResourcePolicy({
-        policy: 'cross-origin'
-    })
-);
-
-app.use(
-    helmet.referrerPolicy({
-        policy: 'no-referrer'
-    })
-);
-
-// sanitize request data
-// Configure xssClean middleware to whitelist all tags except <script> and allow "style" attribute
-const xssOptions = {
-    whiteList: {
-        '*': ['style'], // Allow all tags with "style" attribute
-        script: [] // Disallow <script> tags
-    }
-};
-
-app.use(xss(xssOptions));
-
-// app.use(mongoSanitize());
-
-// gzip compression
-app.use(compression());
-
-// --------------------------------------------------------Middleware Ended----------------------------------------------
-
-// -----------------------------Middleware for storing API logs into DB
-app.use(function (req, res, next) {
-    // Do whatever you want this will execute when response is finished
-    res.once('end', function () {
+// Middleware for logging API interactions in DB
+app.use((req, res, next) => {
+    res.once('end', () => {
         createUserApiLog(req, res);
     });
-
-    // Save Response body
     const oldSend = res.send;
     res.send = function (data) {
         res.locals.resBody = isJsonStr(data) ? JSON.parse(data) : data;
@@ -126,47 +58,90 @@ app.use(function (req, res, next) {
     };
     next();
 });
-// --------------------------------------------------------Middleware Ended----------------------------------------------
 
+// Serve static files from uploads
 app.use('/uploads', express.static('uploads'));
 
-// Routes which should handle requests
+// NHTSA API Routes
+
+// 1. Get All Vehicle Makes
+app.get('/api/all-makes', async (req, res, next) => {
+    try {
+        const response = await axios.get(`${NHTSA_BASE_URL}/GetAllMakes?format=json`);
+        res.json(response.data);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// 2. Get Models for a Specific Make
+app.get('/api/vehicle-models/:make', async (req, res, next) => {
+    try {
+        const make = req.params.make;
+        const response = await axios.get(`${NHTSA_BASE_URL}/GetModelsForMake/${make}?format=json`);
+        res.json(response.data);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// 3. Decode a VIN
+app.get('/api/decode-vin/:vin', async (req, res, next) => {
+    try {
+        const vin = req.params.vin;
+        const response = await axios.get(`${NHTSA_BASE_URL}/DecodeVinValues/${vin}?format=json`);
+        res.json(response.data);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Optional NHTSA Routes
+app.get('/api/vehicle-types/:make', async (req, res, next) => {
+    try {
+        const make = req.params.make;
+        const response = await axios.get(`${NHTSA_BASE_URL}/GetVehicleTypesForMake/${make}?format=json`);
+        res.json(response.data);
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.get('/api/makes-for-vehicle-type/:vehicleType', async (req, res, next) => {
+    try {
+        const vehicleType = req.params.vehicleType;
+        const response = await axios.get(`${NHTSA_BASE_URL}/GetMakesForVehicleType/${vehicleType}?format=json`);
+        res.json(response.data);
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.get('/api/equipment-plant-codes', async (req, res, next) => {
+    try {
+        const response = await axios.get(`${NHTSA_BASE_URL}/GetEquipmentPlantCodes?format=json`);
+        res.json(response.data);
+    } catch (error) {
+        next(error);
+    }
+});
+
+// Additional Routes
 app.use('/' + config.server.route + '/user', userRoutes);
 app.use('/' + config.server.route + '/media', mediaRouter);
 app.use('/' + config.server.route + '/admin', adminRouter);
 app.use('/' + config.server.route + '/claim', claimRouter);
 
-// ----------------------------Middleware for catching 404 and forward to error handler
+// Handle 404 Not Found
 app.use((req, res, next) => {
     const error = new Error(errorHandler.ERROR_404);
     error.statusCode = 404;
     next(error);
 });
 
-process.on('unhandledRejection', (error) => {
-    logger.log({
-        level: 'error',
-        message: `Unhandled Rejection:, ${JSON.stringify({ error: error.message, stack: error.stack })}`
-    });
-    // Additional logic (like sending email notifications)
-    process.exit(1);
-});
-
-process.on('uncaughtException', (error) => {
-    logger.log({
-        level: 'error',
-        message: `Unhandled Exception:, ${JSON.stringify({ error: error.message, stack: error.stack })}`
-    }); // Additional logic (like shutting down the server gracefully)
-    process.exit(1);
-});
-
-// Error handler
+// Error handling for all routes
 app.use((error, req, res, next) => {
-    console.log(JSON.stringify(error));
-
-    if (res.headersSent) {
-        return next(error);
-    }
+    if (res.headersSent) return next(error);
 
     const sendErrorResponse = (status, message, desc, stack) => {
         res.status(status).json({
@@ -177,35 +152,40 @@ app.use((error, req, res, next) => {
         });
     };
 
-    // Celebrate validation errors
     if (isCelebrateError(error)) {
         const errorBody = error.details.get('body') || error.details.get('headers') || error.details.get('params');
-        const {
-            details: [errorDetails]
-        } = errorBody;
+        const { details: [errorDetails] } = errorBody;
         sendErrorResponse(422, 'Validation error', errorDetails.message, error.stack);
-    } else if (error.name === 'MongoError') {
-        // MongoDB errors
-        if (error.code === 11000) {
-            sendErrorResponse(409, 'Conflict', 'Duplicate key', error.stack);
-        } else {
-            sendErrorResponse(500, 'error', error.message || 'Internal Server Error', error.stack);
-        }
+    } else if (error.name === 'MongoError' && error.code === 11000) {
+        sendErrorResponse(409, 'Conflict', 'Duplicate key', error.stack);
     } else if (error.name === 'CastError' && error.kind === 'ObjectId') {
-        // ObjectID errors
         sendErrorResponse(400, 'Bad Request', 'Invalid ID', error.stack);
     } else if (error.name === 'ValidationError') {
-        // Validation errors
-        const messages = Object.values(error.errors).map((e) => e.message);
-        sendErrorResponse(422, 'error', 'Validation failed', error.stack, messages);
+        const messages = Object.values(error.errors).map(e => e.message);
+        sendErrorResponse(422, 'Validation failed', messages.join(', '), error.stack);
     } else {
-        // Other errors
-        const statusCode = error.statusCode || 500;
-        sendErrorResponse(statusCode, 'error', error.message || 'Internal Server Error', error.stack);
+        sendErrorResponse(error.statusCode || 500, 'error', error.message || 'Internal Server Error', error.stack);
     }
 });
 
-// Best Tested place that store only uncaught errors
+// Log errors
 app.use(expressErrorLogger);
+
+// Handle Unhandled Rejections and Exceptions
+process.on('unhandledRejection', (error) => {
+    logger.log({
+        level: 'error',
+        message: `Unhandled Rejection:, ${JSON.stringify({ error: error.message, stack: error.stack })}`
+    });
+    process.exit(1);
+});
+
+process.on('uncaughtException', (error) => {
+    logger.log({
+        level: 'error',
+        message: `Unhandled Exception:, ${JSON.stringify({ error: error.message, stack: error.stack })}`
+    });
+    process.exit(1);
+});
 
 module.exports = app;
