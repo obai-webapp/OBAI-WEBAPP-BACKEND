@@ -15,20 +15,15 @@ const config = require('./src/config/config');
 require('./src/config/mongoose').connect(); // Connect to MongoDB
 const errorHandler = require('./src/utils/error-handler');
 
-// Routes
+// Import routes
 const userRoutes = require('./src/routes/user-routes');
 const mediaRouter = require('./src/routes/media-routes');
 const adminRouter = require('./src/routes/admin');
 const claimRouter = require('./src/routes/claim');
+const vehicleRouter = require('./src/routes/vehicle-routes'); // Ensure vehicleRouter is imported
 
 const app = express();
 const NHTSA_BASE_URL = 'https://vpic.nhtsa.dot.gov/api/vehicles';
-
-// Ensure uploads folder exists
-const uploadsFolder = './uploads';
-if (!fs.existsSync(uploadsFolder)) {
-    fs.mkdirSync(uploadsFolder);
-}
 
 // Middleware configurations
 app.use(cors());
@@ -41,96 +36,12 @@ app.use(compression());
 app.use(expressLogger);
 app.use(endMw); // Middleware to signal when request handling is complete
 
-// Custom route to ping the server
-app.get('/' + config.server.route + '/pingServer', (req, res) => {
-    res.status(200).send('OK');
-});
-
-// Middleware for logging API interactions in DB
-app.use((req, res, next) => {
-    res.once('end', () => {
-        createUserApiLog(req, res);
-    });
-    const oldSend = res.send;
-    res.send = function (data) {
-        res.locals.resBody = isJsonStr(data) ? JSON.parse(data) : data;
-        oldSend.apply(res, arguments);
-    };
-    next();
-});
-
-// Serve static files from uploads
-app.use('/uploads', express.static('uploads'));
-
-// NHTSA API Routes
-
-// 1. Get All Vehicle Makes
-app.get('/api/all-makes', async (req, res, next) => {
-    try {
-        const response = await axios.get(`${NHTSA_BASE_URL}/GetAllMakes?format=json`);
-        res.json(response.data);
-    } catch (error) {
-        next(error);
-    }
-});
-
-// 2. Get Models for a Specific Make
-app.get('/api/vehicle-models/:make', async (req, res, next) => {
-    try {
-        const make = req.params.make;
-        const response = await axios.get(`${NHTSA_BASE_URL}/GetModelsForMake/${make}?format=json`);
-        res.json(response.data);
-    } catch (error) {
-        next(error);
-    }
-});
-
-// 3. Decode a VIN
-app.get('/api/decode-vin/:vin', async (req, res, next) => {
-    try {
-        const vin = req.params.vin;
-        const response = await axios.get(`${NHTSA_BASE_URL}/DecodeVinValues/${vin}?format=json`);
-        res.json(response.data);
-    } catch (error) {
-        next(error);
-    }
-});
-
-// Optional NHTSA Routes
-app.get('/api/vehicle-types/:make', async (req, res, next) => {
-    try {
-        const make = req.params.make;
-        const response = await axios.get(`${NHTSA_BASE_URL}/GetVehicleTypesForMake/${make}?format=json`);
-        res.json(response.data);
-    } catch (error) {
-        next(error);
-    }
-});
-
-app.get('/api/makes-for-vehicle-type/:vehicleType', async (req, res, next) => {
-    try {
-        const vehicleType = req.params.vehicleType;
-        const response = await axios.get(`${NHTSA_BASE_URL}/GetMakesForVehicleType/${vehicleType}?format=json`);
-        res.json(response.data);
-    } catch (error) {
-        next(error);
-    }
-});
-
-app.get('/api/equipment-plant-codes', async (req, res, next) => {
-    try {
-        const response = await axios.get(`${NHTSA_BASE_URL}/GetEquipmentPlantCodes?format=json`);
-        res.json(response.data);
-    } catch (error) {
-        next(error);
-    }
-});
-
-// Additional Routes
+// Mount routes
 app.use('/' + config.server.route + '/user', userRoutes);
 app.use('/' + config.server.route + '/media', mediaRouter);
 app.use('/' + config.server.route + '/admin', adminRouter);
 app.use('/' + config.server.route + '/claim', claimRouter);
+app.use('/vehicle', vehicleRouter); // Mount vehicle routes
 
 // Handle 404 Not Found
 app.use((req, res, next) => {

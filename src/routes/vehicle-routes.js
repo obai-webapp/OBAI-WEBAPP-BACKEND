@@ -1,11 +1,13 @@
 const express = require('express');
 const vehicleRouter = express.Router();
-const { celebrate } = require('celebrate');
+const { celebrate, Joi } = require('celebrate');
 const VehicleController = require('../controllers/vehicle-controller');
 const audit = require('../middleware/audit');
 
 const API = {
-    SCAN_VIN: '/scan-vin'
+    SCAN_VIN: '/scan-vin',
+    VEHICLE_SPECIFICATIONS: '/specifications/:vin',
+    VEHICLE_SELECTIONS: '/selections'
 };
 
 // VIN validation schema
@@ -23,5 +25,9 @@ vehicleRouter.post(
     celebrate(VinValidator.scanVIN),
     VehicleController.scanVIN
 );
+
+// Add the new routes
+vehicleRouter.get(API.VEHICLE_SPECIFICATIONS, VehicleController.getVehicleSpecifications);
+vehicleRouter.get(API.VEHICLE_SELECTIONS, VehicleController.getVehicleSelections);
 
 module.exports = vehicleRouter;
