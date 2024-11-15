@@ -16,9 +16,17 @@ const port = process.env.PORT || config.server.port;
 
 // CORS configuration
 const cors = require('cors');
+const allowedOrigins = [process.env.UI_LINK, process.env.UII_LINK];
+
 app.use(cors({
-    origin: process.env.UI_LINK,
-    credentials: true,  // Include credentials if using session cookies
+    origin: function (origin, callback) {
+        if (allowedOrigins.includes(origin) || !origin) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
+    credentials: true  // Include credentials if using session cookies
 }));
 
 if (cluster.isMaster) {
@@ -46,7 +54,7 @@ if (cluster.isMaster) {
     // Create HTTP server for each worker
     const server = http.createServer(app);
 
-    server.listen(port, () => {
+    server.listen(port, '0.0.0.0', () => {
         console.log(`Worker ${cluster.worker.id} running on http://localhost:${port} in ${process.env.NODE_ENV || 'development'} environment with process ID ${cluster.worker.process.pid}`);
     });
 
